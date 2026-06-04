@@ -23,7 +23,7 @@ const EXTENSION_ORIGIN = chrome.runtime.getURL("");
 function estimatePopupContentHeight(width: number, count: number): number {
   const CARD_MAX = 239;
   const GAP = 19;
-  const PAD_X = 48;
+  const PAD_X = 24;
   const PAD_Y = 28;
   const TITLE_BLOCK = 36;
   const STRIP_MAX = 1180;
