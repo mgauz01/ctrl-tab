@@ -8,6 +8,7 @@ const SWITCHER_LIMIT = 5;
 const FALLBACK_PATH = "dist/fallback.html";
 
 const fallbackTabs = new Map<number, number>();
+const EXTENSION_ORIGIN = chrome.runtime.getURL("");
 
 function isInjectableUrl(url: string | undefined): boolean {
   if (!url) return false;
@@ -16,6 +17,17 @@ function isInjectableUrl(url: string | undefined): boolean {
     url.startsWith("https://") ||
     url.startsWith("file://")
   );
+}
+
+function isFallbackTab(tabId: number): boolean {
+  for (const fbId of fallbackTabs.values()) {
+    if (fbId === tabId) return true;
+  }
+  return false;
+}
+
+function isSwitcherTab(tabId: number, url: string | undefined): boolean {
+  return isFallbackTab(tabId) || (url?.startsWith(EXTENSION_ORIGIN) ?? false);
 }
 
 function initialSelectedIndex(count: number): number {
@@ -29,6 +41,7 @@ async function resolveSwitcherTabs(windowId: number): Promise<SwitcherTab[]> {
     try {
       const tab = await chrome.tabs.get(id);
       if (tab.windowId !== windowId || tab.discarded) continue;
+      if (isSwitcherTab(id, tab.url)) continue;
       const thumbDataUrl = await thumbs.getThumbnail(id);
       tabs.push({
         id,
@@ -212,6 +225,7 @@ chrome.runtime.onMessage.addListener(
 
 chrome.tabs.onActivated.addListener((info) => {
   const { tabId, windowId } = info;
+  if (isFallbackTab(tabId)) return;
   mru.onTabActivated(windowId, tabId);
   setTimeout(() => {
     void thumbs.captureTabThumbnail(windowId, tabId);
