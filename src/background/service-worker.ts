@@ -2,7 +2,7 @@ import * as mru from "./mru.js";
 import * as thumbs from "./thumbnails.js";
 import type { SwitcherPayload, SwitcherTab } from "../shared/types.js";
 import type { BackgroundMessage } from "../shared/messages.js";
-import { OVERLAY_HIDE, OVERLAY_SHOW } from "../shared/messages.js";
+import { OVERLAY_HIDE, OVERLAY_SHOW, OVERLAY_STEP } from "../shared/messages.js";
 
 const SWITCHER_LIMIT = 5;
 const FALLBACK_PATH = "dist/fallback.html";
@@ -13,8 +13,18 @@ interface PopupRef {
 }
 
 const popups = new Map<number, PopupRef>();
+// Parent windowId -> the tab that currently hosts the switcher UI (an
+// injected page tab, or the popup's own tab). Presence means "open".
+const openSwitchers = new Map<number, { tabId: number }>();
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
-const POPUP_HEIGHT = 400;
+const POPUP_HEIGHT = 360;
+
+function findParentByPopupWindow(windowId: number): number | null {
+  for (const [parentId, ref] of popups.entries()) {
+    if (ref.windowId === windowId) return parentId;
+  }
+  return null;
+}
 
 function isInjectableUrl(url: string | undefined): boolean {
   if (!url) return false;
@@ -43,8 +53,9 @@ function isSwitcherTab(tabId: number, url: string | undefined): boolean {
   return isPopupTab(tabId) || (url?.startsWith(EXTENSION_ORIGIN) ?? false);
 }
 
-function initialSelectedIndex(count: number): number {
-  return count >= 2 ? 1 : 0;
+function initialSelectedIndex(count: number, backwards: boolean): number {
+  if (count < 2) return 0;
+  return backwards ? count - 1 : 1;
 }
 
 async function resolveSwitcherTabs(windowId: number): Promise<SwitcherTab[]> {
@@ -177,18 +188,49 @@ async function openPopupSwitcher(
       type: OVERLAY_SHOW,
       payload,
     });
+    openSwitchers.set(windowId, { tabId: ref.tabId });
   } catch {
     /* popup closed before ready */
   }
 }
 
-async function showSwitcher(windowId: number): Promise<void> {
+async function stepSwitcher(windowId: number, delta: number): Promise<void> {
+  const state = openSwitchers.get(windowId);
+  if (!state) return;
+  try {
+    await chrome.tabs.sendMessage(state.tabId, { type: OVERLAY_STEP, delta });
+    armSwitcherTimeout(windowId);
+  } catch {
+    openSwitchers.delete(windowId);
+  }
+}
+
+async function resizePopup(parentWindowId: number, height: number): Promise<void> {
+  const ref = popups.get(parentWindowId);
+  if (!ref) return;
+  const h = Math.max(120, Math.round(height));
+  try {
+    const parent = await chrome.windows.get(parentWindowId);
+    const py = parent.top ?? 0;
+    const ph = parent.height ?? 800;
+    const top = py + Math.max(ph - h - 72, 24);
+    await chrome.windows.update(ref.windowId, { height: h, top });
+  } catch {
+    try {
+      await chrome.windows.update(ref.windowId, { height: h });
+    } catch {
+      /* popup gone */
+    }
+  }
+}
+
+async function showSwitcher(windowId: number, backwards = false): Promise<void> {
   const tabs = await resolveSwitcherTabs(windowId);
   if (tabs.length === 0) return;
 
   const payload: SwitcherPayload = {
     tabs,
-    selectedIndex: initialSelectedIndex(tabs.length),
+    selectedIndex: initialSelectedIndex(tabs.length, backwards),
     windowId,
   };
 
@@ -196,6 +238,7 @@ async function showSwitcher(windowId: number): Promise<void> {
   if (active?.id != null && isInjectableUrl(active.url)) {
     try {
       await injectOverlay(active.id, payload);
+      openSwitchers.set(windowId, { tabId: active.id });
       armSwitcherTimeout(windowId);
       return;
     } catch {
@@ -222,6 +265,7 @@ async function hideSwitcherInWindow(windowId: number): Promise<void> {
     clearTimeout(switcherTimeout);
     switcherTimeout = null;
   }
+  openSwitchers.delete(windowId);
   await closePopup(windowId);
   const tabs = await chrome.tabs.query({ windowId });
   for (const t of tabs) {
@@ -247,10 +291,27 @@ async function commitTab(windowId: number, tabId: number): Promise<void> {
 }
 
 chrome.commands.onCommand.addListener(async (command) => {
-  if (command !== "open-switcher") return;
+  const delta =
+    command === "open-switcher" ? 1 : command === "open-switcher-back" ? -1 : 0;
+  if (delta === 0) return;
+
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (active?.windowId == null) return;
-  await showSwitcher(active.windowId);
+
+  // If the focused window is one of our popups, route stepping to the
+  // switcher that belongs to its parent window.
+  const popupParent = findParentByPopupWindow(active.windowId);
+  if (popupParent != null && openSwitchers.has(popupParent)) {
+    await stepSwitcher(popupParent, delta);
+    return;
+  }
+
+  if (openSwitchers.has(active.windowId)) {
+    await stepSwitcher(active.windowId, delta);
+    return;
+  }
+
+  await showSwitcher(active.windowId, delta < 0);
 });
 
 chrome.runtime.onMessage.addListener(
@@ -261,6 +322,10 @@ chrome.runtime.onMessage.addListener(
     }
     if (msg.type === "CANCEL") {
       void hideSwitcherInWindow(msg.windowId).then(() => sendResponse({ ok: true }));
+      return true;
+    }
+    if (msg.type === "RESIZE_POPUP") {
+      void resizePopup(msg.windowId, msg.height).then(() => sendResponse({ ok: true }));
       return true;
     }
     return false;

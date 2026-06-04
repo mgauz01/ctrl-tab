@@ -15,10 +15,12 @@ npm run build
 
 ## Usage
 
-- Press **Ctrl+Q** to open the switcher (keep **Ctrl** held).
-- While holding **Ctrl** / **Cmd**: **Tab** moves right (older), **Shift+Tab** moves left (newer).
+- Hold **Ctrl** and press **Q** to open the switcher; keep **Ctrl** held and tap **Q** again to cycle right (older tabs).
+- **Ctrl+Shift+Q** cycles left (newer tabs). **Tab** / **Shift+Tab** also work while the menu is open.
 - Hover a preview to select it.
 - Release **Ctrl** / **Cmd** to activate the highlighted tab.
+
+Set both shortcuts at `chrome://extensions/shortcuts` if Chrome doesn't bind them automatically (some platforms reserve **Ctrl+Shift+Q**).
 
 ## Optional: remap Ctrl+Tab → Ctrl+Q
 

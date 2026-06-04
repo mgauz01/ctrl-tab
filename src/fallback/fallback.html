@@ -19,10 +19,12 @@
         background-attachment: fixed;
       }
 
-      /* In the popup window the whole surface is the menu, so fill it. */
+      /* In the popup window the whole surface is the menu, so fill it
+         and hug the tab cards tightly (minimal vertical padding). */
       #ctrl-tab-root .ctrl-tab-panel {
         height: 100vh;
         align-items: center;
+        padding: 14px 24px;
         background: transparent;
         backdrop-filter: none;
         -webkit-backdrop-filter: none;

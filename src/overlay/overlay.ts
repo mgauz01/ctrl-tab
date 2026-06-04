@@ -1,11 +1,19 @@
 import type { SwitcherPayload } from "../shared/types.js";
-import { OVERLAY_HIDE, OVERLAY_SHOW } from "../shared/messages.js";
+import { OVERLAY_HIDE, OVERLAY_SHOW, OVERLAY_STEP } from "../shared/messages.js";
 
 const ROOT_ID = "ctrl-tab-root";
 
 let selectedIndex = 0;
 let payload: SwitcherPayload | null = null;
 let keyHandlersAttached = false;
+
+function step(delta: number): void {
+  if (!payload) return;
+  const n = payload.tabs.length;
+  if (n === 0) return;
+  selectedIndex = (selectedIndex + delta + n) % n;
+  updateSelection();
+}
 
 function removeOverlay(): void {
   document.getElementById(ROOT_ID)?.remove();
@@ -43,14 +51,15 @@ function onKeyDown(e: KeyboardEvent): void {
   if (e.key === "Tab") {
     e.preventDefault();
     e.stopPropagation();
-    const n = payload.tabs.length;
-    if (n === 0) return;
-    if (e.shiftKey) {
-      selectedIndex = (selectedIndex - 1 + n) % n;
-    } else {
-      selectedIndex = (selectedIndex + 1) % n;
-    }
-    updateSelection();
+    step(e.shiftKey ? -1 : 1);
+    return;
+  }
+  // Swallow the opener chord so the page never reacts to it. Actual
+  // stepping is driven by the background command re-firing (OVERLAY_STEP),
+  // which is reliable even when the page would otherwise eat the keypress.
+  if ((e.key === "q" || e.key === "Q") && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    e.stopPropagation();
   }
 }
 
@@ -165,6 +174,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+  if (msg?.type === OVERLAY_STEP) {
+    step(typeof msg.delta === "number" ? msg.delta : 1);
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg?.type === OVERLAY_HIDE) {
     removeOverlay();
     sendResponse({ ok: true });
@@ -175,4 +189,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 export function mountSwitcher(data: SwitcherPayload): void {
   showSwitcher(data);
+}
+
+export function measureContentHeight(): number {
+  const strip = document.querySelector<HTMLElement>(".ctrl-tab-strip");
+  if (!strip) return 0;
+  return Math.ceil(strip.getBoundingClientRect().height);
 }

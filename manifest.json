@@ -15,7 +15,14 @@
         "default": "Ctrl+Q",
         "mac": "Ctrl+Q"
       },
-      "description": "Open recent-tab switcher (Ctrl+Q)"
+      "description": "Open switcher / cycle to next recent tab"
+    },
+    "open-switcher-back": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Q",
+        "mac": "Ctrl+Shift+Q"
+      },
+      "description": "Open switcher / cycle to previous recent tab"
     }
   },
   "web_accessible_resources": [
