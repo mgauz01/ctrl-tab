@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Ctrl+Tab MRU Switcher",
+  "version": "0.1.0",
+  "description": "Firefox-style recent-tab switcher with previews (hold Ctrl, press Tab, release to land).",
+  "permissions": ["tabs", "scripting", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "commands": {
+    "open-switcher": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "Ctrl+Shift+E"
+      },
+      "description": "Open recent-tab switcher"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/overlay.css"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
