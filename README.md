@@ -33,7 +33,7 @@ On some Linux desktops, **Ctrl+Q** quits the active application. If that conflic
 
 ## Restricted pages
 
-On `chrome://`, Web Store, or PDF viewer pages, the switcher opens a short-lived extension tab to capture **Ctrl** release, then closes after you land on a tab.
+Chrome forbids in-page overlays on `chrome://`, the New Tab Page, the Web Store, and PDF viewer pages. On those pages the switcher opens a small **popup window** anchored near the bottom of the screen (instead of a full tab). Release **Ctrl** to land on a tab in your original window; the popup closes automatically. The popup is never tracked as a recent tab.
 
 ## License
 

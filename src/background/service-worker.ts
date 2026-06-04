@@ -7,8 +7,14 @@ import { OVERLAY_HIDE, OVERLAY_SHOW } from "../shared/messages.js";
 const SWITCHER_LIMIT = 5;
 const FALLBACK_PATH = "dist/fallback.html";
 
-const fallbackTabs = new Map<number, number>();
+interface PopupRef {
+  windowId: number;
+  tabId: number;
+}
+
+const popups = new Map<number, PopupRef>();
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
+const POPUP_HEIGHT = 400;
 
 function isInjectableUrl(url: string | undefined): boolean {
   if (!url) return false;
@@ -19,15 +25,22 @@ function isInjectableUrl(url: string | undefined): boolean {
   );
 }
 
-function isFallbackTab(tabId: number): boolean {
-  for (const fbId of fallbackTabs.values()) {
-    if (fbId === tabId) return true;
+function isPopupTab(tabId: number): boolean {
+  for (const ref of popups.values()) {
+    if (ref.tabId === tabId) return true;
+  }
+  return false;
+}
+
+function isPopupWindow(windowId: number): boolean {
+  for (const ref of popups.values()) {
+    if (ref.windowId === windowId) return true;
   }
   return false;
 }
 
 function isSwitcherTab(tabId: number, url: string | undefined): boolean {
-  return isFallbackTab(tabId) || (url?.startsWith(EXTENSION_ORIGIN) ?? false);
+  return isPopupTab(tabId) || (url?.startsWith(EXTENSION_ORIGIN) ?? false);
 }
 
 function initialSelectedIndex(count: number): number {
@@ -94,46 +107,78 @@ async function injectOverlay(tabId: number, payload: SwitcherPayload): Promise<v
   });
 }
 
-async function openFallbackSwitcher(
+async function computePopupBounds(parentWindowId: number): Promise<{
+  width: number;
+  height: number;
+  left: number;
+  top: number;
+}> {
+  try {
+    const parent = await chrome.windows.get(parentWindowId);
+    const pw = parent.width ?? 1200;
+    const ph = parent.height ?? 800;
+    const px = parent.left ?? 0;
+    const py = parent.top ?? 0;
+    const width = Math.min(Math.max(pw - 120, 640), 1280);
+    const left = px + Math.round((pw - width) / 2);
+    const top = py + Math.max(ph - POPUP_HEIGHT - 72, 24);
+    return { width, height: POPUP_HEIGHT, left, top };
+  } catch {
+    return { width: 800, height: POPUP_HEIGHT, left: 80, top: 120 };
+  }
+}
+
+async function openPopupSwitcher(
   windowId: number,
   payload: SwitcherPayload
 ): Promise<void> {
-  const existing = fallbackTabs.get(windowId);
+  const existing = popups.get(windowId);
   if (existing != null) {
     try {
-      await chrome.tabs.update(existing, { active: true });
-      await chrome.tabs.sendMessage(existing, {
+      await chrome.windows.update(existing.windowId, { focused: true });
+      await chrome.tabs.sendMessage(existing.tabId, {
         type: OVERLAY_SHOW,
         payload,
       });
       return;
     } catch {
-      fallbackTabs.delete(windowId);
+      popups.delete(windowId);
     }
   }
-  const tab = await chrome.tabs.create({
-    windowId,
+
+  const bounds = await computePopupBounds(windowId);
+  const popup = await chrome.windows.create({
     url: chrome.runtime.getURL(FALLBACK_PATH),
-    active: true,
+    type: "popup",
+    focused: true,
+    width: bounds.width,
+    height: bounds.height,
+    left: bounds.left,
+    top: bounds.top,
   });
-  if (tab.id != null) {
-    fallbackTabs.set(windowId, tab.id);
-    await new Promise<void>((resolve) => {
-      const listener = (
-        tabId: number,
-        info: chrome.tabs.TabChangeInfo
-      ) => {
-        if (tabId === tab.id && info.status === "complete") {
-          chrome.tabs.onUpdated.removeListener(listener);
-          resolve();
-        }
-      };
-      chrome.tabs.onUpdated.addListener(listener);
-    });
-    await chrome.tabs.sendMessage(tab.id, {
+
+  const popupTab = popup?.tabs?.[0];
+  if (popup?.id == null || popupTab?.id == null) return;
+  const ref: PopupRef = { windowId: popup.id, tabId: popupTab.id };
+  popups.set(windowId, ref);
+
+  await new Promise<void>((resolve) => {
+    const listener = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (tabId === ref.tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+
+  try {
+    await chrome.tabs.sendMessage(ref.tabId, {
       type: OVERLAY_SHOW,
       payload,
     });
+  } catch {
+    /* popup closed before ready */
   }
 }
 
@@ -157,8 +202,19 @@ async function showSwitcher(windowId: number): Promise<void> {
       /* fall through */
     }
   }
-  await openFallbackSwitcher(windowId, payload);
+  await openPopupSwitcher(windowId, payload);
   armSwitcherTimeout(windowId);
+}
+
+async function closePopup(windowId: number): Promise<void> {
+  const ref = popups.get(windowId);
+  if (ref == null) return;
+  popups.delete(windowId);
+  try {
+    await chrome.windows.remove(ref.windowId);
+  } catch {
+    /* already closed */
+  }
 }
 
 async function hideSwitcherInWindow(windowId: number): Promise<void> {
@@ -166,23 +222,10 @@ async function hideSwitcherInWindow(windowId: number): Promise<void> {
     clearTimeout(switcherTimeout);
     switcherTimeout = null;
   }
-  const fb = fallbackTabs.get(windowId);
-  if (fb != null) {
-    try {
-      await chrome.tabs.sendMessage(fb, { type: OVERLAY_HIDE });
-    } catch {
-      /* ignore */
-    }
-    try {
-      await chrome.tabs.remove(fb);
-    } catch {
-      /* ignore */
-    }
-    fallbackTabs.delete(windowId);
-  }
+  await closePopup(windowId);
   const tabs = await chrome.tabs.query({ windowId });
   for (const t of tabs) {
-    if (t.id == null || t.id === fb) continue;
+    if (t.id == null) continue;
     if (!isInjectableUrl(t.url)) continue;
     try {
       await chrome.tabs.sendMessage(t.id, { type: OVERLAY_HIDE });
@@ -196,6 +239,7 @@ async function commitTab(windowId: number, tabId: number): Promise<void> {
   await hideSwitcherInWindow(windowId);
   try {
     await chrome.tabs.update(tabId, { active: true });
+    await chrome.windows.update(windowId, { focused: true });
     mru.promoteTab(windowId, tabId);
   } catch {
     /* tab gone */
@@ -225,7 +269,7 @@ chrome.runtime.onMessage.addListener(
 
 chrome.tabs.onActivated.addListener((info) => {
   const { tabId, windowId } = info;
-  if (isFallbackTab(tabId)) return;
+  if (isPopupTab(tabId) || isPopupWindow(windowId)) return;
   mru.onTabActivated(windowId, tabId);
   setTimeout(() => {
     void thumbs.captureTabThumbnail(windowId, tabId);
@@ -233,19 +277,25 @@ chrome.tabs.onActivated.addListener((info) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  if (isPopupTab(tabId)) return;
   mru.onTabRemoved(tabId);
   void thumbs.removeThumbnail(tabId);
-  for (const [winId, fbId] of fallbackTabs.entries()) {
-    if (fbId === tabId) fallbackTabs.delete(winId);
-  }
 });
 
 chrome.tabs.onDetached.addListener((tabId, detachInfo) => {
+  if (isPopupTab(tabId)) return;
   mru.onTabDetached(tabId, detachInfo.oldWindowId);
 });
 
 chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
+  if (isPopupTab(tabId)) return;
   mru.onTabAttached(tabId, attachInfo.newWindowId);
+});
+
+chrome.windows.onRemoved.addListener((closedWindowId) => {
+  for (const [parentId, ref] of popups.entries()) {
+    if (ref.windowId === closedWindowId) popups.delete(parentId);
+  }
 });
 
 void mru.bootstrapWindows();
