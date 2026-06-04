@@ -10,6 +10,7 @@ const FALLBACK_PATH = "dist/fallback.html";
 interface PopupRef {
   windowId: number;
   tabId: number;
+  height: number;
 }
 
 const popups = new Map<number, PopupRef>();
@@ -17,7 +18,22 @@ const popups = new Map<number, PopupRef>();
 // injected page tab, or the popup's own tab). Presence means "open".
 const openSwitchers = new Map<number, { tabId: number }>();
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
-const POPUP_HEIGHT = 360;
+
+// Mirrors overlay.css so the popup can open at its final size (no resize jump).
+function estimatePopupContentHeight(width: number, count: number): number {
+  const CARD_MAX = 239;
+  const GAP = 19;
+  const PAD_X = 48;
+  const PAD_Y = 28;
+  const TITLE_BLOCK = 36;
+  const STRIP_MAX = 1180;
+  const n = Math.max(count, 1);
+  const stripW = Math.min(width - PAD_X, STRIP_MAX);
+  const cardW = Math.min(CARD_MAX, (stripW - (n - 1) * GAP) / n);
+  const previewH = (cardW * 10) / 16 + 6;
+  const cardH = TITLE_BLOCK + previewH + 4;
+  return Math.round(cardH + PAD_Y);
+}
 
 function findParentByPopupWindow(windowId: number): number | null {
   for (const [parentId, ref] of popups.entries()) {
@@ -118,7 +134,12 @@ async function injectOverlay(tabId: number, payload: SwitcherPayload): Promise<v
   });
 }
 
-async function computePopupBounds(parentWindowId: number): Promise<{
+const CHROME_HEIGHT_ESTIMATE = 30;
+
+async function computePopupBounds(
+  parentWindowId: number,
+  count: number
+): Promise<{
   width: number;
   height: number;
   left: number;
@@ -131,11 +152,16 @@ async function computePopupBounds(parentWindowId: number): Promise<{
     const px = parent.left ?? 0;
     const py = parent.top ?? 0;
     const width = Math.min(Math.max(pw - 120, 640), 1280);
+    const height =
+      estimatePopupContentHeight(width, count) + CHROME_HEIGHT_ESTIMATE;
     const left = px + Math.round((pw - width) / 2);
-    const top = py + Math.max(ph - POPUP_HEIGHT - 72, 24);
-    return { width, height: POPUP_HEIGHT, left, top };
+    const top = py + Math.max(ph - height - 72, 24);
+    return { width, height, left, top };
   } catch {
-    return { width: 800, height: POPUP_HEIGHT, left: 80, top: 120 };
+    const width = 800;
+    const height =
+      estimatePopupContentHeight(width, count) + CHROME_HEIGHT_ESTIMATE;
+    return { width, height, left: 80, top: 120 };
   }
 }
 
@@ -157,7 +183,7 @@ async function openPopupSwitcher(
     }
   }
 
-  const bounds = await computePopupBounds(windowId);
+  const bounds = await computePopupBounds(windowId, payload.tabs.length);
   const popup = await chrome.windows.create({
     url: chrome.runtime.getURL(FALLBACK_PATH),
     type: "popup",
@@ -170,7 +196,11 @@ async function openPopupSwitcher(
 
   const popupTab = popup?.tabs?.[0];
   if (popup?.id == null || popupTab?.id == null) return;
-  const ref: PopupRef = { windowId: popup.id, tabId: popupTab.id };
+  const ref: PopupRef = {
+    windowId: popup.id,
+    tabId: popupTab.id,
+    height: bounds.height,
+  };
   popups.set(windowId, ref);
 
   await new Promise<void>((resolve) => {
@@ -209,6 +239,9 @@ async function resizePopup(parentWindowId: number, height: number): Promise<void
   const ref = popups.get(parentWindowId);
   if (!ref) return;
   const h = Math.max(120, Math.round(height));
+  // Skip imperceptible corrections so the popup never visibly resizes.
+  if (Math.abs(h - ref.height) < 8) return;
+  ref.height = h;
   try {
     const parent = await chrome.windows.get(parentWindowId);
     const py = parent.top ?? 0;

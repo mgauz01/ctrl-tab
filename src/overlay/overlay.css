@@ -39,7 +39,9 @@
   display: flex;
   gap: 19px;
   align-items: flex-end;
-  max-width: 100%;
+  justify-content: center;
+  width: 100%;
+  max-width: 1180px;
   overflow: hidden;
   padding-bottom: 4px;
   scrollbar-width: none;
@@ -50,8 +52,9 @@
 }
 
 .ctrl-tab-card {
-  flex: 0 0 auto;
-  width: min(260px, 26vw);
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 239px;
   cursor: default;
   user-select: none;
 }
@@ -65,7 +68,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 260px;
+  max-width: 100%;
   border-radius: 6px;
   transition: none;
 }
