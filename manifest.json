@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Ctrl+Tab MRU Switcher",
+  "name": "Ctrl+Q MRU Switcher",
   "version": "0.1.0",
-  "description": "Firefox-style recent-tab switcher with previews (hold Ctrl, press Tab, release to land).",
+  "description": "Firefox-style recent-tab switcher with previews (Ctrl+Q to open, Tab to cycle, release Ctrl to land).",
   "permissions": ["tabs", "scripting", "storage"],
   "host_permissions": ["<all_urls>"],
   "background": {
@@ -12,10 +12,10 @@
   "commands": {
     "open-switcher": {
       "suggested_key": {
-        "default": "Ctrl+Shift+E",
-        "mac": "Ctrl+Shift+E"
+        "default": "Ctrl+Q",
+        "mac": "Ctrl+Q"
       },
-      "description": "Open recent-tab switcher"
+      "description": "Open recent-tab switcher (Ctrl+Q)"
     }
   },
   "web_accessible_resources": [
