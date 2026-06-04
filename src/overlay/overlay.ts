@@ -130,7 +130,6 @@ function showSwitcher(data: SwitcherPayload): void {
   data.tabs.forEach((tab, i) => {
     const card = document.createElement("div");
     card.className = "ctrl-tab-card" + (i === selectedIndex ? " is-selected" : "");
-    card.dataset.index = String(i);
 
     const title = document.createElement("p");
     title.className = "ctrl-tab-title";
