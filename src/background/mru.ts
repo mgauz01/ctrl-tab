@@ -1,4 +1,4 @@
-const MAX_MRU = 32;
+const MAX_MRU = 8;
 
 const stacks = new Map<number, number[]>();
 

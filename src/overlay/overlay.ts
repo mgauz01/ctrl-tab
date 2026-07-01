@@ -1,5 +1,5 @@
 import type { SwitcherPayload } from "../shared/types.js";
-import { OVERLAY_HIDE, OVERLAY_SHOW, OVERLAY_STEP } from "../shared/messages.js";
+import { OVERLAY_HIDE, OVERLAY_SHOW, OVERLAY_STEP } from "../shared/types.js";
 
 const ROOT_ID = "ctrl-tab-root";
 
@@ -19,6 +19,7 @@ function removeOverlay(): void {
   document.getElementById(ROOT_ID)?.remove();
   detachKeyHandlers();
   document.removeEventListener("visibilitychange", onVisibilityChange, true);
+  window.removeEventListener("pagehide", onPageHide, true);
   payload = null;
 }
 
@@ -113,7 +114,7 @@ function renderPreview(tab: SwitcherPayload["tabs"][0]): HTMLElement {
   return preview;
 }
 
-function showSwitcher(data: SwitcherPayload): void {
+export function showSwitcher(data: SwitcherPayload): void {
   removeOverlay();
   payload = data;
   selectedIndex = data.selectedIndex;
@@ -150,11 +151,17 @@ function showSwitcher(data: SwitcherPayload): void {
   document.documentElement.appendChild(root);
   attachKeyHandlers();
 
-  document.addEventListener(
-    "visibilitychange",
-    onVisibilityChange,
-    true
-  );
+  document.addEventListener("visibilitychange", onVisibilityChange, true);
+  window.addEventListener("pagehide", onPageHide, true);
+}
+
+function onPageHide(): void {
+  if (!payload) return;
+  void chrome.runtime.sendMessage({
+    type: "CANCEL",
+    windowId: payload.windowId,
+  });
+  removeOverlay();
 }
 
 function onVisibilityChange(): void {
@@ -185,10 +192,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   return false;
 });
-
-export function mountSwitcher(data: SwitcherPayload): void {
-  showSwitcher(data);
-}
 
 export function measureContentHeight(): number {
   const strip = document.querySelector<HTMLElement>(".ctrl-tab-strip");
