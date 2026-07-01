@@ -1,4 +1,5 @@
 const THUMB_PREFIX = "thumb:";
+const ORDER_KEY = "thumb:order";
 const MAX_THUMBS = 10;
 const THUMB_WIDTH = 320;
 
@@ -17,7 +18,7 @@ export async function captureTabThumbnail(
     await chrome.storage.session.set({
       [`${THUMB_PREFIX}${expectedTabId}`]: resized,
     });
-    await pruneThumbnails();
+    await touchLru(expectedTabId);
   } catch {
     // Restricted or inactive tab — skip
   }
@@ -26,12 +27,19 @@ export async function captureTabThumbnail(
 async function resizeDataUrl(dataUrl: string, maxWidth: number): Promise<string> {
   const blob = await (await fetch(dataUrl)).blob();
   const bitmap = await createImageBitmap(blob);
-  const scale = Math.min(1, maxWidth / bitmap.width);
+  if (bitmap.width <= maxWidth) {
+    bitmap.close();
+    return dataUrl;
+  }
+  const scale = maxWidth / bitmap.width;
   const w = Math.round(bitmap.width * scale);
   const h = Math.round(bitmap.height * scale);
   const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext("2d");
-  if (!ctx) return dataUrl;
+  if (!ctx) {
+    bitmap.close();
+    return dataUrl;
+  }
   ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close();
   const out = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.65 });
@@ -47,21 +55,41 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-export async function getThumbnail(tabId: number): Promise<string | undefined> {
-  const key = `${THUMB_PREFIX}${tabId}`;
-  const data = await chrome.storage.session.get(key);
-  const url = data[key];
-  return typeof url === "string" ? url : undefined;
+export async function getThumbnails(
+  tabIds: number[]
+): Promise<Map<number, string>> {
+  if (tabIds.length === 0) return new Map();
+  const keys = tabIds.map((id) => `${THUMB_PREFIX}${id}`);
+  const data = await chrome.storage.session.get(keys);
+  const out = new Map<number, string>();
+  for (const id of tabIds) {
+    const url = data[`${THUMB_PREFIX}${id}`];
+    if (typeof url === "string") out.set(id, url);
+  }
+  return out;
 }
 
 export async function removeThumbnail(tabId: number): Promise<void> {
+  const data = await chrome.storage.session.get(ORDER_KEY);
+  const order = ((data[ORDER_KEY] as number[] | undefined) ?? []).filter(
+    (id) => id !== tabId
+  );
   await chrome.storage.session.remove(`${THUMB_PREFIX}${tabId}`);
+  await chrome.storage.session.set({ [ORDER_KEY]: order });
 }
 
-async function pruneThumbnails(): Promise<void> {
-  const all = await chrome.storage.session.get(null);
-  const keys = Object.keys(all).filter((k) => k.startsWith(THUMB_PREFIX));
-  if (keys.length <= MAX_THUMBS) return;
-  const extra = keys.slice(0, keys.length - MAX_THUMBS);
-  await chrome.storage.session.remove(extra);
+async function touchLru(tabId: number): Promise<void> {
+  const data = await chrome.storage.session.get(ORDER_KEY);
+  let order = ((data[ORDER_KEY] as number[] | undefined) ?? []).filter(
+    (id) => id !== tabId
+  );
+  order.unshift(tabId);
+  if (order.length > MAX_THUMBS) {
+    const drop = order.slice(MAX_THUMBS);
+    order = order.slice(0, MAX_THUMBS);
+    await chrome.storage.session.remove(
+      drop.map((id) => `${THUMB_PREFIX}${id}`)
+    );
+  }
+  await chrome.storage.session.set({ [ORDER_KEY]: order });
 }

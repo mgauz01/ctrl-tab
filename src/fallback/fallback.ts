@@ -1,6 +1,6 @@
-import { mountSwitcher, measureContentHeight } from "../overlay/overlay.js";
+import { measureContentHeight, showSwitcher } from "../overlay/overlay.js";
 import type { SwitcherPayload } from "../shared/types.js";
-import { OVERLAY_SHOW } from "../shared/messages.js";
+import { OVERLAY_SHOW } from "../shared/types.js";
 
 const VERTICAL_PADDING = 28;
 
@@ -21,7 +21,7 @@ function requestTightFit(windowId: number): void {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === OVERLAY_SHOW && msg.payload) {
     const payload = msg.payload as SwitcherPayload;
-    mountSwitcher(payload);
+    showSwitcher(payload);
     requestTightFit(payload.windowId);
     sendResponse({ ok: true });
     return true;

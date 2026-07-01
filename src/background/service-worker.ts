@@ -1,11 +1,14 @@
 import * as mru from "./mru.js";
 import * as thumbs from "./thumbnails.js";
-import type { SwitcherPayload, SwitcherTab } from "../shared/types.js";
-import type { BackgroundMessage } from "../shared/messages.js";
-import { OVERLAY_HIDE, OVERLAY_SHOW, OVERLAY_STEP } from "../shared/messages.js";
+import type { BackgroundMessage, SwitcherPayload, SwitcherTab } from "../shared/types.js";
+import { OVERLAY_HIDE, OVERLAY_SHOW, OVERLAY_STEP } from "../shared/types.js";
 
 const SWITCHER_LIMIT = 5;
 const FALLBACK_PATH = "dist/fallback.html";
+const POPUP_MIN_HEIGHT = 200;
+const CHROME_HEIGHT_ESTIMATE = 30;
+const POPUP_LOAD_TIMEOUT_MS = 10_000;
+const CAPTURE_DEBOUNCE_MS = 400;
 
 interface PopupRef {
   windowId: number;
@@ -14,25 +17,21 @@ interface PopupRef {
 }
 
 const popups = new Map<number, PopupRef>();
-// Parent windowId -> the tab that currently hosts the switcher UI (an
-// injected page tab, or the popup's own tab). Presence means "open".
+const popupTabIds = new Set<number>();
+const popupWindowIds = new Set<number>();
 const openSwitchers = new Map<number, { tabId: number }>();
+const switcherTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
+const captureTimers = new Map<number, ReturnType<typeof setTimeout>>();
 const EXTENSION_ORIGIN = chrome.runtime.getURL("");
 
-// Mirrors overlay.css so the popup can open at its final size (no resize jump).
-function estimatePopupContentHeight(width: number, count: number): number {
-  const CARD_MAX = 239;
-  const GAP = 19;
-  const PAD_X = 24;
-  const PAD_Y = 28;
-  const TITLE_BLOCK = 36;
-  const STRIP_MAX = 1180;
-  const n = Math.max(count, 1);
-  const stripW = Math.min(width - PAD_X, STRIP_MAX);
-  const cardW = Math.min(CARD_MAX, (stripW - (n - 1) * GAP) / n);
-  const previewH = (cardW * 10) / 16 + 6;
-  const cardH = TITLE_BLOCK + previewH + 4;
-  return Math.round(cardH + PAD_Y);
+function trackPopup(ref: PopupRef): void {
+  popupTabIds.add(ref.tabId);
+  popupWindowIds.add(ref.windowId);
+}
+
+function untrackPopup(ref: PopupRef): void {
+  popupTabIds.delete(ref.tabId);
+  popupWindowIds.delete(ref.windowId);
 }
 
 function findParentByPopupWindow(windowId: number): number | null {
@@ -51,22 +50,8 @@ function isInjectableUrl(url: string | undefined): boolean {
   );
 }
 
-function isPopupTab(tabId: number): boolean {
-  for (const ref of popups.values()) {
-    if (ref.tabId === tabId) return true;
-  }
-  return false;
-}
-
-function isPopupWindow(windowId: number): boolean {
-  for (const ref of popups.values()) {
-    if (ref.windowId === windowId) return true;
-  }
-  return false;
-}
-
 function isSwitcherTab(tabId: number, url: string | undefined): boolean {
-  return isPopupTab(tabId) || (url?.startsWith(EXTENSION_ORIGIN) ?? false);
+  return popupTabIds.has(tabId) || (url?.startsWith(EXTENSION_ORIGIN) ?? false);
 }
 
 function initialSelectedIndex(count: number, backwards: boolean): number {
@@ -76,34 +61,47 @@ function initialSelectedIndex(count: number, backwards: boolean): number {
 
 async function resolveSwitcherTabs(windowId: number): Promise<SwitcherTab[]> {
   const ids = mru.getMruTabIds(windowId, SWITCHER_LIMIT);
-  const tabs: SwitcherTab[] = [];
-  for (const id of ids) {
-    try {
-      const tab = await chrome.tabs.get(id);
-      if (tab.windowId !== windowId || tab.discarded) continue;
-      if (isSwitcherTab(id, tab.url)) continue;
-      const thumbDataUrl = await thumbs.getThumbnail(id);
-      tabs.push({
-        id,
-        title: tab.title ?? "",
-        url: tab.url ?? "",
-        favIconUrl: tab.favIconUrl,
-        thumbDataUrl,
-      });
-    } catch {
-      // Tab closed
-    }
-  }
-  return tabs;
+  const thumbsById = await thumbs.getThumbnails(ids);
+
+  const resolved = await Promise.all(
+    ids.map(async (id): Promise<SwitcherTab | null> => {
+      try {
+        const tab = await chrome.tabs.get(id);
+        if (tab.windowId !== windowId || tab.discarded) return null;
+        if (isSwitcherTab(id, tab.url)) return null;
+        return {
+          id,
+          title: tab.title ?? "",
+          url: tab.url ?? "",
+          favIconUrl: tab.favIconUrl,
+          thumbDataUrl: thumbsById.get(id),
+        };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return resolved.filter((t): t is SwitcherTab => t != null);
 }
 
-let switcherTimeout: ReturnType<typeof setTimeout> | null = null;
+function clearSwitcherTimeout(windowId: number): void {
+  const t = switcherTimeouts.get(windowId);
+  if (t) {
+    clearTimeout(t);
+    switcherTimeouts.delete(windowId);
+  }
+}
 
 function armSwitcherTimeout(windowId: number): void {
-  if (switcherTimeout) clearTimeout(switcherTimeout);
-  switcherTimeout = setTimeout(() => {
-    void hideSwitcherInWindow(windowId);
-  }, 30_000);
+  clearSwitcherTimeout(windowId);
+  switcherTimeouts.set(
+    windowId,
+    setTimeout(() => {
+      switcherTimeouts.delete(windowId);
+      void hideSwitcherInWindow(windowId);
+    }, 30_000)
+  );
 }
 
 async function injectOverlay(tabId: number, payload: SwitcherPayload): Promise<void> {
@@ -134,17 +132,15 @@ async function injectOverlay(tabId: number, payload: SwitcherPayload): Promise<v
   });
 }
 
-const CHROME_HEIGHT_ESTIMATE = 30;
-
 async function computePopupBounds(
-  parentWindowId: number,
-  count: number
+  parentWindowId: number
 ): Promise<{
   width: number;
   height: number;
   left: number;
   top: number;
 }> {
+  const height = POPUP_MIN_HEIGHT + CHROME_HEIGHT_ESTIMATE;
   try {
     const parent = await chrome.windows.get(parentWindowId);
     const pw = parent.width ?? 1200;
@@ -152,17 +148,29 @@ async function computePopupBounds(
     const px = parent.left ?? 0;
     const py = parent.top ?? 0;
     const width = Math.min(Math.max(pw - 120, 640), 1280);
-    const height =
-      estimatePopupContentHeight(width, count) + CHROME_HEIGHT_ESTIMATE;
     const left = px + Math.round((pw - width) / 2);
     const top = py + Math.max(ph - height - 72, 24);
     return { width, height, left, top };
   } catch {
-    const width = 800;
-    const height =
-      estimatePopupContentHeight(width, count) + CHROME_HEIGHT_ESTIMATE;
-    return { width, height, left: 80, top: 120 };
+    return { width: 800, height, left: 80, top: 120 };
   }
+}
+
+async function waitForPopupTab(tabId: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, POPUP_LOAD_TIMEOUT_MS);
+    const listener = (updatedId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updatedId === tabId && info.status === "complete") {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
 }
 
 async function openPopupSwitcher(
@@ -179,11 +187,12 @@ async function openPopupSwitcher(
       });
       return;
     } catch {
+      untrackPopup(existing);
       popups.delete(windowId);
     }
   }
 
-  const bounds = await computePopupBounds(windowId, payload.tabs.length);
+  const bounds = await computePopupBounds(windowId);
   const popup = await chrome.windows.create({
     url: chrome.runtime.getURL(FALLBACK_PATH),
     type: "popup",
@@ -202,16 +211,9 @@ async function openPopupSwitcher(
     height: bounds.height,
   };
   popups.set(windowId, ref);
+  trackPopup(ref);
 
-  await new Promise<void>((resolve) => {
-    const listener = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
-      if (tabId === ref.tabId && info.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    };
-    chrome.tabs.onUpdated.addListener(listener);
-  });
+  await waitForPopupTab(ref.tabId);
 
   try {
     await chrome.tabs.sendMessage(ref.tabId, {
@@ -239,7 +241,6 @@ async function resizePopup(parentWindowId: number, height: number): Promise<void
   const ref = popups.get(parentWindowId);
   if (!ref) return;
   const h = Math.max(120, Math.round(height));
-  // Skip imperceptible corrections so the popup never visibly resizes.
   if (Math.abs(h - ref.height) < 8) return;
   ref.height = h;
   try {
@@ -285,6 +286,7 @@ async function showSwitcher(windowId: number, backwards = false): Promise<void> 
 async function closePopup(windowId: number): Promise<void> {
   const ref = popups.get(windowId);
   if (ref == null) return;
+  untrackPopup(ref);
   popups.delete(windowId);
   try {
     await chrome.windows.remove(ref.windowId);
@@ -293,23 +295,22 @@ async function closePopup(windowId: number): Promise<void> {
   }
 }
 
-async function hideSwitcherInWindow(windowId: number): Promise<void> {
-  if (switcherTimeout) {
-    clearTimeout(switcherTimeout);
-    switcherTimeout = null;
+async function hideOverlayHost(tabId: number): Promise<void> {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!isInjectableUrl(tab.url)) return;
+    await chrome.tabs.sendMessage(tabId, { type: OVERLAY_HIDE });
+  } catch {
+    /* no overlay or tab gone */
   }
+}
+
+async function hideSwitcherInWindow(windowId: number): Promise<void> {
+  clearSwitcherTimeout(windowId);
+  const host = openSwitchers.get(windowId);
   openSwitchers.delete(windowId);
   await closePopup(windowId);
-  const tabs = await chrome.tabs.query({ windowId });
-  for (const t of tabs) {
-    if (t.id == null) continue;
-    if (!isInjectableUrl(t.url)) continue;
-    try {
-      await chrome.tabs.sendMessage(t.id, { type: OVERLAY_HIDE });
-    } catch {
-      /* no overlay */
-    }
-  }
+  if (host) await hideOverlayHost(host.tabId);
 }
 
 async function commitTab(windowId: number, tabId: number): Promise<void> {
@@ -323,6 +324,18 @@ async function commitTab(windowId: number, tabId: number): Promise<void> {
   }
 }
 
+function scheduleCapture(windowId: number, tabId: number): void {
+  const prev = captureTimers.get(tabId);
+  if (prev) clearTimeout(prev);
+  captureTimers.set(
+    tabId,
+    setTimeout(() => {
+      captureTimers.delete(tabId);
+      void thumbs.captureTabThumbnail(windowId, tabId);
+    }, CAPTURE_DEBOUNCE_MS)
+  );
+}
+
 chrome.commands.onCommand.addListener(async (command) => {
   const delta =
     command === "open-switcher" ? 1 : command === "open-switcher-back" ? -1 : 0;
@@ -331,8 +344,6 @@ chrome.commands.onCommand.addListener(async (command) => {
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (active?.windowId == null) return;
 
-  // If the focused window is one of our popups, route stepping to the
-  // switcher that belongs to its parent window.
   const popupParent = findParentByPopupWindow(active.windowId);
   if (popupParent != null && openSwitchers.has(popupParent)) {
     await stepSwitcher(popupParent, delta);
@@ -367,32 +378,40 @@ chrome.runtime.onMessage.addListener(
 
 chrome.tabs.onActivated.addListener((info) => {
   const { tabId, windowId } = info;
-  if (isPopupTab(tabId) || isPopupWindow(windowId)) return;
+  if (popupTabIds.has(tabId) || popupWindowIds.has(windowId)) return;
   mru.onTabActivated(windowId, tabId);
-  setTimeout(() => {
-    void thumbs.captureTabThumbnail(windowId, tabId);
-  }, 200);
+  scheduleCapture(windowId, tabId);
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (isPopupTab(tabId)) return;
+  const t = captureTimers.get(tabId);
+  if (t) {
+    clearTimeout(t);
+    captureTimers.delete(tabId);
+  }
+  if (popupTabIds.has(tabId)) return;
   mru.onTabRemoved(tabId);
   void thumbs.removeThumbnail(tabId);
 });
 
 chrome.tabs.onDetached.addListener((tabId, detachInfo) => {
-  if (isPopupTab(tabId)) return;
+  if (popupTabIds.has(tabId)) return;
   mru.onTabDetached(tabId, detachInfo.oldWindowId);
 });
 
 chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
-  if (isPopupTab(tabId)) return;
+  if (popupTabIds.has(tabId)) return;
   mru.onTabAttached(tabId, attachInfo.newWindowId);
 });
 
 chrome.windows.onRemoved.addListener((closedWindowId) => {
   for (const [parentId, ref] of popups.entries()) {
-    if (ref.windowId === closedWindowId) popups.delete(parentId);
+    if (ref.windowId === closedWindowId) {
+      untrackPopup(ref);
+      popups.delete(parentId);
+      clearSwitcherTimeout(parentId);
+      openSwitchers.delete(parentId);
+    }
   }
 });
 
