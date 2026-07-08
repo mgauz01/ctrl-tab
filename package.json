@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node esbuild.config.mjs",
-    "watch": "node esbuild.config.mjs --watch"
+    "watch": "node esbuild.config.mjs --watch",
+    "check:mru": "node scripts/check-mru.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

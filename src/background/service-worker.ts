@@ -318,7 +318,7 @@ async function commitTab(windowId: number, tabId: number): Promise<void> {
   try {
     await chrome.tabs.update(tabId, { active: true });
     await chrome.windows.update(windowId, { focused: true });
-    mru.promoteTab(windowId, tabId);
+    mru.onTabActivated(windowId, tabId);
   } catch {
     /* tab gone */
   }
