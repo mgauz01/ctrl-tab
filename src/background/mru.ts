@@ -2,6 +2,7 @@ const MAX_MRU = 8;
 const STORAGE_KEY = "mru:stacks";
 
 const stacks = new Map<number, number[]>();
+let persistQueue = Promise.resolve();
 
 /** Pure stack promote — exported for the self-check. */
 export function promoteInStack(
@@ -19,9 +20,15 @@ export function promoteInStack(
 function persist(): void {
   const obj: Record<string, number[]> = {};
   for (const [wid, stack] of stacks) {
-    obj[String(wid)] = stack;
+    obj[String(wid)] = [...stack];
   }
-  void chrome.storage.session.set({ [STORAGE_KEY]: obj });
+  persistQueue = persistQueue
+    .then(async () => {
+      await chrome.storage.session.set({ [STORAGE_KEY]: obj });
+    })
+    .catch(() => {
+      // Session storage is best-effort; the in-memory stack remains authoritative.
+    });
 }
 
 async function restore(): Promise<void> {
@@ -30,7 +37,15 @@ async function restore(): Promise<void> {
   if (!obj || typeof obj !== "object") return;
   for (const [k, stack] of Object.entries(obj)) {
     if (!Array.isArray(stack)) continue;
-    stacks.set(Number(k), stack.filter((id) => typeof id === "number"));
+    const windowId = Number(k);
+    if (!Number.isFinite(windowId)) continue;
+    const restored = stack.filter((id) => typeof id === "number");
+    const current = stacks.get(windowId) ?? [];
+    const merged = [
+      ...current,
+      ...restored.filter((id) => !current.includes(id)),
+    ].slice(0, MAX_MRU);
+    stacks.set(windowId, merged);
   }
 }
 

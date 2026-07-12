@@ -13,6 +13,20 @@ npm run build
 2. Open `chrome://extensions/shortcuts` and confirm **Open recent-tab switcher** is bound to **Ctrl+Q** (set it manually if needed).
 3. Reload the extension after rebuilding.
 
+## Testing
+
+```bash
+npm test              # Unit and mocked Chrome integration tests
+npm run test:coverage # Unit/integration coverage report
+npm run test:e2e      # Build and exercise the overlay in Chromium
+npm run check         # Typecheck, unit/integration, build, and browser tests
+```
+
+The integration tests use a deterministic Chrome API mock to exercise service
+worker lifecycle and tab/window events. Playwright loads the built overlay in
+Chromium to verify rendering, keyboard cycling, and commit messaging, then loads
+the unpacked extension to verify its manifest, service worker, and fallback page.
+
 ## Usage
 
 - Hold **Ctrl** and press **Q** to open the switcher; keep **Ctrl** held and tap **Q** again to cycle right (older tabs).

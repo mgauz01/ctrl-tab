@@ -2,11 +2,22 @@ const THUMB_PREFIX = "thumb:";
 const ORDER_KEY = "thumb:order";
 const MAX_THUMBS = 10;
 const THUMB_WIDTH = 320;
+let orderQueue = Promise.resolve();
+const tabGenerations = new Map<number, number>();
+
+function serializeOrderUpdate(operation: () => Promise<void>): Promise<void> {
+  const next = orderQueue.then(operation);
+  orderQueue = next.catch(() => {
+    // Keep later LRU updates running if one storage operation fails.
+  });
+  return next;
+}
 
 export async function captureTabThumbnail(
   windowId: number,
   expectedTabId: number
 ): Promise<void> {
+  const generation = tabGenerations.get(expectedTabId) ?? 0;
   try {
     const [active] = await chrome.tabs.query({ active: true, windowId });
     if (active?.id !== expectedTabId) return;
@@ -15,10 +26,13 @@ export async function captureTabThumbnail(
       quality: 65,
     });
     const resized = await resizeDataUrl(dataUrl, THUMB_WIDTH);
-    await chrome.storage.session.set({
-      [`${THUMB_PREFIX}${expectedTabId}`]: resized,
+    await serializeOrderUpdate(async () => {
+      if ((tabGenerations.get(expectedTabId) ?? 0) !== generation) return;
+      await chrome.storage.session.set({
+        [`${THUMB_PREFIX}${expectedTabId}`]: resized,
+      });
+      await touchLruUnlocked(expectedTabId);
     });
-    await touchLru(expectedTabId);
   } catch {
     // Restricted or inactive tab — skip
   }
@@ -70,15 +84,18 @@ export async function getThumbnails(
 }
 
 export async function removeThumbnail(tabId: number): Promise<void> {
-  const data = await chrome.storage.session.get(ORDER_KEY);
-  const order = ((data[ORDER_KEY] as number[] | undefined) ?? []).filter(
-    (id) => id !== tabId
-  );
-  await chrome.storage.session.remove(`${THUMB_PREFIX}${tabId}`);
-  await chrome.storage.session.set({ [ORDER_KEY]: order });
+  tabGenerations.set(tabId, (tabGenerations.get(tabId) ?? 0) + 1);
+  await serializeOrderUpdate(async () => {
+    const data = await chrome.storage.session.get(ORDER_KEY);
+    const order = ((data[ORDER_KEY] as number[] | undefined) ?? []).filter(
+      (id) => id !== tabId
+    );
+    await chrome.storage.session.remove(`${THUMB_PREFIX}${tabId}`);
+    await chrome.storage.session.set({ [ORDER_KEY]: order });
+  });
 }
 
-async function touchLru(tabId: number): Promise<void> {
+async function touchLruUnlocked(tabId: number): Promise<void> {
   const data = await chrome.storage.session.get(ORDER_KEY);
   let order = ((data[ORDER_KEY] as number[] | undefined) ?? []).filter(
     (id) => id !== tabId

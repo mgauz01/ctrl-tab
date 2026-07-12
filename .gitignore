@@ -1,4 +1,9 @@
 node_modules/
 dist/
+coverage/
+playwright-report/
+test-results/
 *.log
 .DS_Store
+
+.compound-engineering/*.local.yaml
