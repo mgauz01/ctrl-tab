@@ -10,20 +10,31 @@
         margin: 0;
         height: 100%;
         overflow: hidden;
-        background: radial-gradient(
-            120% 90% at 50% 100%,
-            rgba(59, 130, 246, 0.22) 0%,
-            transparent 60%
-          ),
-          linear-gradient(160deg, #0b1020 0%, #11162a 55%, #0b1020 100%);
-        background-attachment: fixed;
+        /* Match in-page panel tokens so popup isn't a different product. */
+        background: linear-gradient(
+          to top,
+          rgba(18, 22, 33, 0.55) 0%,
+          rgba(18, 22, 33, 0.28) 55%,
+          rgba(18, 22, 33, 0.12) 100%
+        );
       }
 
-      /* In the popup window the whole surface is the menu, so fill it
-         and hug the tab cards tightly (minimal vertical padding). */
+      @media (prefers-color-scheme: light) {
+        html,
+        body {
+          background: linear-gradient(
+            to top,
+            rgba(226, 232, 240, 0.95) 0%,
+            rgba(241, 245, 249, 0.8) 55%,
+            rgba(248, 250, 252, 0.4) 100%
+          );
+        }
+      }
+
       #ctrl-tab-root .ctrl-tab-panel {
         height: 100vh;
-        align-items: center;
+        max-height: none;
+        justify-content: center;
         padding: 14px 12px;
         background: transparent;
         backdrop-filter: none;

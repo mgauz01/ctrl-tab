@@ -62,6 +62,7 @@ test("built overlay renders, cycles, and commits the selected tab", async ({
   });
 
   await expect(page.locator("#ctrl-tab-root")).toBeVisible();
+  await expect(page.locator(".ctrl-tab-hint")).toContainText("Release Ctrl");
   await expect(page.locator(".ctrl-tab-card")).toHaveCount(3);
   await expect(page.locator(".ctrl-tab-card.is-selected .ctrl-tab-title")).toHaveText(
     "Recent"

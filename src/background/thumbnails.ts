@@ -1,7 +1,9 @@
 const THUMB_PREFIX = "thumb:";
 const ORDER_KEY = "thumb:order";
 const MAX_THUMBS = 10;
-const THUMB_WIDTH = 320;
+// ponytail: 240px / q55 is enough for strip cards; bump if previews look mushy
+const THUMB_WIDTH = 240;
+const THUMB_QUALITY = 55;
 let orderQueue = Promise.resolve();
 const tabGenerations = new Map<number, number>();
 
@@ -23,7 +25,7 @@ export async function captureTabThumbnail(
     if (active?.id !== expectedTabId) return;
     const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
       format: "jpeg",
-      quality: 65,
+      quality: THUMB_QUALITY,
     });
     const resized = await resizeDataUrl(dataUrl, THUMB_WIDTH);
     await serializeOrderUpdate(async () => {
@@ -56,7 +58,10 @@ async function resizeDataUrl(dataUrl: string, maxWidth: number): Promise<string>
   }
   ctx.drawImage(bitmap, 0, 0, w, h);
   bitmap.close();
-  const out = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.65 });
+  const out = await canvas.convertToBlob({
+    type: "image/jpeg",
+    quality: THUMB_QUALITY / 100,
+  });
   return blobToDataUrl(out);
 }
 

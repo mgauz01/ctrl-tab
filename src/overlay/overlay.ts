@@ -15,6 +15,19 @@ function step(delta: number): void {
   updateSelection();
 }
 
+function commitSelected(): void {
+  if (!payload) return;
+  const tab = payload.tabs[selectedIndex];
+  if (tab) {
+    void chrome.runtime.sendMessage({
+      type: "COMMIT",
+      tabId: tab.id,
+      windowId: payload.windowId,
+    });
+  }
+  removeOverlay();
+}
+
 function removeOverlay(): void {
   document.getElementById(ROOT_ID)?.remove();
   detachKeyHandlers();
@@ -69,15 +82,7 @@ function onKeyUp(e: KeyboardEvent): void {
   if (e.key === "Control" || e.key === "Meta") {
     e.preventDefault();
     e.stopPropagation();
-    const tab = payload.tabs[selectedIndex];
-    if (tab) {
-      void chrome.runtime.sendMessage({
-        type: "COMMIT",
-        tabId: tab.id,
-        windowId: payload.windowId,
-      });
-    }
-    removeOverlay();
+    commitSelected();
   }
 }
 
@@ -85,7 +90,9 @@ function updateSelection(): void {
   const root = document.getElementById(ROOT_ID);
   if (!root) return;
   root.querySelectorAll(".ctrl-tab-card").forEach((card, i) => {
-    card.classList.toggle("is-selected", i === selectedIndex);
+    const selected = i === selectedIndex;
+    card.classList.toggle("is-selected", selected);
+    card.setAttribute("aria-selected", selected ? "true" : "false");
   });
 }
 
@@ -96,6 +103,7 @@ function renderPreview(tab: SwitcherPayload["tabs"][0]): HTMLElement {
     const img = document.createElement("img");
     img.src = tab.thumbDataUrl;
     img.alt = "";
+    img.decoding = "async";
     preview.appendChild(img);
   } else {
     const ph = document.createElement("div");
@@ -121,16 +129,30 @@ export function showSwitcher(data: SwitcherPayload): void {
 
   const root = document.createElement("div");
   root.id = ROOT_ID;
+  root.setAttribute("role", "dialog");
+  root.setAttribute("aria-modal", "true");
+  root.setAttribute("aria-label", "Recent tabs");
 
   const panel = document.createElement("div");
   panel.className = "ctrl-tab-panel";
 
+  const hint = document.createElement("p");
+  hint.className = "ctrl-tab-hint";
+  hint.id = "ctrl-tab-hint";
+  hint.textContent = "Release Ctrl to switch · click a tab · Esc to cancel";
+
   const strip = document.createElement("div");
   strip.className = "ctrl-tab-strip";
+  strip.setAttribute("role", "listbox");
+  strip.setAttribute("aria-orientation", "horizontal");
+  strip.setAttribute("aria-describedby", "ctrl-tab-hint");
 
   data.tabs.forEach((tab, i) => {
     const card = document.createElement("div");
     card.className = "ctrl-tab-card" + (i === selectedIndex ? " is-selected" : "");
+    card.setAttribute("role", "option");
+    card.setAttribute("aria-selected", i === selectedIndex ? "true" : "false");
+    card.tabIndex = -1;
 
     const title = document.createElement("p");
     title.className = "ctrl-tab-title";
@@ -142,10 +164,17 @@ export function showSwitcher(data: SwitcherPayload): void {
       selectedIndex = i;
       updateSelection();
     });
+    card.addEventListener("click", (e) => {
+      e.preventDefault();
+      selectedIndex = i;
+      updateSelection();
+      commitSelected();
+    });
 
     strip.appendChild(card);
   });
 
+  panel.appendChild(hint);
   panel.appendChild(strip);
   root.appendChild(panel);
   document.documentElement.appendChild(root);
@@ -194,7 +223,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 export function measureContentHeight(): number {
-  const strip = document.querySelector<HTMLElement>(".ctrl-tab-strip");
-  if (!strip) return 0;
-  return Math.ceil(strip.getBoundingClientRect().height);
+  const panel = document.querySelector<HTMLElement>(".ctrl-tab-panel");
+  if (!panel) return 0;
+  return Math.ceil(panel.getBoundingClientRect().height);
 }
