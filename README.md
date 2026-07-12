@@ -41,6 +41,7 @@ Set both shortcuts at `chrome://extensions/shortcuts` if Chrome doesn't bind the
 Chrome reserves **Ctrl+Tab** for built-in tab order. If you prefer that chord, use the scripts in [`scripts/`](scripts/) to send **Ctrl+Q** instead:
 
 - **Windows**: [`scripts/remap-ctrl-tab.ahk`](scripts/remap-ctrl-tab.ahk) (AutoHotkey v2).
+<!-- FIXME: edge case handling -->
 - **Linux (X11)**: [`scripts/remap-ctrl-tab.sh`](scripts/remap-ctrl-tab.sh) (xbindkeys + xdotool).
 
 ## Note on Ctrl+Q
