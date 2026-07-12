@@ -64,7 +64,7 @@ describe("service worker integration", () => {
 
     expect(mock.chrome.tabs.captureVisibleTab).toHaveBeenCalledWith(10, {
       format: "jpeg",
-      quality: 65,
+      quality: 55,
     });
   });
 

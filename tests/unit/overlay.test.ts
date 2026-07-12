@@ -30,6 +30,17 @@ describe("overlay UI", () => {
       vi.fn()
     );
     expect(document.querySelectorAll(".ctrl-tab-card")).toHaveLength(3);
+    expect(document.getElementById("ctrl-tab-root")?.getAttribute("role")).toBe(
+      "dialog"
+    );
+    expect(document.querySelector(".ctrl-tab-hint")?.textContent).toMatch(
+      /Release Ctrl/
+    );
+    expect(
+      document.querySelector(".ctrl-tab-card.is-selected")?.getAttribute(
+        "aria-selected"
+      )
+    ).toBe("true");
     expect(
       document.querySelector(".ctrl-tab-card.is-selected .ctrl-tab-title")
         ?.textContent
@@ -56,6 +67,23 @@ describe("overlay UI", () => {
     expect(mock.chrome.runtime.sendMessage).toHaveBeenCalledWith({
       type: "COMMIT",
       tabId: 2,
+      windowId: 10,
+    });
+    expect(document.getElementById("ctrl-tab-root")).toBeNull();
+  });
+
+  it("commits a tab when its card is clicked", async () => {
+    const mock = installChromeMock();
+    const { showSwitcher } = await import("../../src/overlay/overlay.js");
+    showSwitcher(payload);
+
+    document.querySelectorAll(".ctrl-tab-card")[2]?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true })
+    );
+
+    expect(mock.chrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: "COMMIT",
+      tabId: 3,
       windowId: 10,
     });
     expect(document.getElementById("ctrl-tab-root")).toBeNull();
